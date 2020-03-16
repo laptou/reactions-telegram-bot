@@ -52,13 +52,13 @@ function tryParseJSON(str: string | null | undefined): any {
 (async () => {
   const self = await bot.telegram.getMe();
 
-  bot.command('r', (ctx, next) => {
+  bot.command('r', async (ctx, next) => {
     try {
       if (
         ctx.message?.reply_to_message &&
         ctx.message?.reply_to_message.from?.id === self.id) {
         logger.trace('received /r', { message: ctx.message, chat: ctx.chat });
-        bot.telegram.sendMessage(ctx.chat!.id, '\u034f', {
+        await bot.telegram.sendMessage(ctx.chat!.id, '\u034f', {
           disable_notification: true,
           reply_to_message_id: ctx.message.reply_to_message.message_id,
           reply_markup: {
@@ -72,7 +72,7 @@ function tryParseJSON(str: string | null | undefined): any {
         });
       }
 
-      ctx.deleteMessage();
+      await ctx.deleteMessage();
 
       next?.();
     } catch (error) {
