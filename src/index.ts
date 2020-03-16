@@ -56,7 +56,7 @@ function tryParseJSON(str: string | null | undefined): any {
     try {
       if (
         ctx.message?.reply_to_message &&
-        ctx.message?.reply_to_message.from?.id === self.id) {
+        ctx.message?.reply_to_message.from?.id !== self.id) {
         logger.trace('received /r', { message: ctx.message, chat: ctx.chat });
         await bot.telegram.sendMessage(ctx.chat!.id, '\u034f', {
           disable_notification: true,
