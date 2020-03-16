@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "experimentalDecorators": true,
+    "allowJs": true,
+    "module": "commonjs",
+    "target": "ES2019",
+    "skipLibCheck": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "noImplicitAny": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "outDir": "dist",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "paths": {
+    },
+  },
+  "include": [
+    "src/**/*"
+  ]
+}
