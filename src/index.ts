@@ -49,93 +49,101 @@ function tryParseJSON(str: string | null | undefined): any {
   }
 }
 
-bot.command('r', (ctx, next) => {
-  if (ctx.message?.reply_to_message) {
-    bot.telegram.sendMessage(ctx.chat!.id, '\u034f', {
-      reply_to_message_id: ctx.message.reply_to_message.message_id,
-      reply_markup: {
-        inline_keyboard: [
-          REACTION_VALUES.map(v => ({
-            text: REACTION_EMOJIS[v],
-            callback_data: JSON.stringify({ reaction: v, users: [] })
-          }))
-        ]
-      }
-    });
-  }
+(async () => {
+  const self = await bot.telegram.getMe();
 
-  ctx.deleteMessage();
-
-  next?.();
-});
-
-// respond to button click
-bot.use(async (ctx, next) => {
-  if (ctx.callbackQuery) {
-    const { callbackQuery } = ctx;
-
-    const callbackData = tryParseJSON(callbackQuery.data);
-    if (!callbackData) {
-      logger.warn('callbackData was null', { ctx });
-      return;
+  bot.command('r', (ctx, next) => {
+    if (
+      ctx.message?.reply_to_message &&
+      ctx.message?.reply_to_message.from?.id === self.id) {
+      logger.trace('received /r', { message: ctx.message, chat: ctx.chat });
+      bot.telegram.sendMessage(ctx.chat!.id, '\u034f', {
+        disable_notification: true,
+        reply_to_message_id: ctx.message.reply_to_message.message_id,
+        reply_markup: {
+          inline_keyboard: [
+            REACTION_VALUES.map(v => ({
+              text: REACTION_EMOJIS[v],
+              callback_data: JSON.stringify({ reaction: v, users: [] })
+            }))
+          ]
+        }
+      });
     }
 
-    const { reaction: newReaction } = callbackData;
-    if (!REACTION_VALUES.includes(newReaction)) {
-      logger.warn('received invalid reaction', {
-        reaction: newReaction,
-        ctx
+    ctx.deleteMessage();
+
+    next?.();
+  });
+
+  // respond to button click
+  bot.use(async (ctx, next) => {
+    if (ctx.callbackQuery) {
+      const { callbackQuery } = ctx;
+
+      const callbackData = tryParseJSON(callbackQuery.data);
+      if (!callbackData) {
+        logger.warn('callbackData was null', { ctx });
+        return;
+      }
+
+      const { reaction: newReaction } = callbackData;
+      if (!REACTION_VALUES.includes(newReaction)) {
+        logger.warn('received invalid reaction', {
+          reaction: newReaction,
+          ctx
+        });
+
+        return;
+      }
+
+      const message = callbackQuery.message;
+      if (!message) return;
+
+      const { inline_keyboard: inlineKeyboard } = (callbackQuery.message as any).reply_markup as tt.InlineKeyboardMarkup;
+
+      // parse the old inline keyboard and make a new one
+      const reactionUsers = Object.fromEntries(inlineKeyboard[0].map(button => {
+        const buttonCallbackData = tryParseJSON(button.callback_data) as ButtonData;
+        const { reaction, users } = buttonCallbackData;
+
+        const idIndex = users.indexOf(callbackQuery.from.id);
+        if (reaction === newReaction && idIndex === -1) {
+          users.push(callbackQuery.from.id);
+        }
+
+        if (idIndex !== -1) {
+          users.splice(idIndex, 1);
+        }
+
+        return [reaction, users] as const;
+      }));
+
+      await ctx.editMessageReplyMarkup({
+        inline_keyboard: [
+          REACTION_VALUES.map(v => {
+            return {
+              text: reactionUsers[v].length > 0 ?
+                REACTION_EMOJIS[v] + ' ' + reactionUsers[v].length :
+                REACTION_EMOJIS[v],
+              callback_data: JSON.stringify({ reaction: v, users: reactionUsers[v] })
+            };
+          })
+        ]
       });
 
-      return;
+      try {
+        // this can fail if we took too long to respond
+        await ctx.answerCbQuery();
+      } catch {
+        logger.warn('failed to answer cb query', { callbackQuery });
+      }
     }
 
-    const message = callbackQuery.message;
-    if (!message) return;
+    next?.();
+  });
 
-    const { inline_keyboard: inlineKeyboard } = (callbackQuery.message as any).reply_markup as tt.InlineKeyboardMarkup;
+  await bot.launch();
 
-    // parse the old inline keyboard and make a new one
-    const reactionUsers = Object.fromEntries(inlineKeyboard[0].map(button => {
-      const buttonCallbackData = tryParseJSON(button.callback_data) as ButtonData;
-      const { reaction, users } = buttonCallbackData;
-
-      const idIndex = users.indexOf(callbackQuery.from.id);
-      if (reaction === newReaction && idIndex === -1) {
-        users.push(callbackQuery.from.id);
-      }
-
-      if (idIndex !== -1) {
-        users.splice(idIndex, 1);
-      }
-
-      return [reaction, users] as const;
-    }));
-
-    await ctx.editMessageReplyMarkup({
-      inline_keyboard: [
-        REACTION_VALUES.map(v => {
-          return {
-            text: reactionUsers[v].length > 0 ?
-              REACTION_EMOJIS[v] + ' ' + reactionUsers[v].length :
-              REACTION_EMOJIS[v],
-            callback_data: JSON.stringify({ reaction: v, users: reactionUsers[v] })
-          };
-        })
-      ]
-    });
-
-    try {
-      // this can fail if we took too long to respond
-      await ctx.answerCbQuery();
-    } catch {
-      logger.warn('failed to answer cb query', { callbackQuery });
-    }
-  }
-
-  next?.();
-});
-
-bot.launch();
-
-logger.info('launched Reactions bot');
+  logger.info('launched Reactions bot');
+})();
