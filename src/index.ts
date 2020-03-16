@@ -83,9 +83,9 @@ function tryParseJSON(str: string | null | undefined): any {
   // respond to button click
   bot.use(async (ctx, next) => {
     if (ctx.callbackQuery) {
-      try {
-        const { callbackQuery } = ctx;
+      const { callbackQuery } = ctx;
 
+      try {
         const callbackData = tryParseJSON(callbackQuery.data);
         if (!callbackData) {
           logger.warn('callbackData was null', { ctx });
@@ -137,7 +137,7 @@ function tryParseJSON(str: string | null | undefined): any {
           ]
         });
       } catch (error) {
-        logger.error('error on processing callback query', { error });
+        logger.error('error on processing callback query', { error, callbackQuery });
       }
 
       try {
