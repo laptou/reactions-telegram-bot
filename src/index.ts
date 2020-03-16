@@ -1,9 +1,8 @@
 /* eslint-disable @typescript-eslint/camelcase */
-import Telegraf from 'telegraf';
 import type * as tt from 'telegram-typings';
 import Pino from 'pino';
+import Telegraf from 'telegraf';
 
-const dev = process.env.NODE_ENV === 'development';
 const token = process.env.BOT_TOKEN;
 const logger = Pino();
 
@@ -11,6 +10,8 @@ if (!token) {
   logger.error('Must supply BOT_TOKEN environment variable with bot token inside.');
   process.exit(1);
 }
+
+logger.info('starting Reactions bot');
 
 enum Reaction {
   Heart = 'heart',
@@ -68,6 +69,7 @@ bot.command('r', (ctx, next) => {
   next?.();
 });
 
+// respond to button click
 bot.use(async (ctx, next) => {
   if (ctx.callbackQuery) {
     const { callbackQuery } = ctx;
@@ -103,13 +105,12 @@ bot.use(async (ctx, next) => {
         users.push(callbackQuery.from.id);
       }
 
-      if (reaction !== newReaction && idIndex !== -1) {
+      if (idIndex !== -1) {
         users.splice(idIndex, 1);
       }
 
       return [reaction, users] as const;
     }));
-
 
     await ctx.editMessageReplyMarkup({
       inline_keyboard: [
@@ -124,10 +125,17 @@ bot.use(async (ctx, next) => {
       ]
     });
 
-    await ctx.answerCbQuery();
+    try {
+      // this can fail if we took too long to respond
+      await ctx.answerCbQuery();
+    } catch {
+      logger.warn('failed to answer cb query', { callbackQuery });
+    }
   }
 
   next?.();
 });
 
 bot.launch();
+
+logger.info('launched Reactions bot');
