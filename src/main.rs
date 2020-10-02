@@ -240,20 +240,7 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
             .await?;
         return Ok(());
     };
-
-    let text = if let Some(text) = msg.text() {
-        text
-    } else {
-        cx.bot
-            .answer_callback_query(query.id)
-            .text("Something's wrong with that message. Try this on another message.")
-            .show_alert(true)
-            .cache_time(1000)
-            .send()
-            .await?;
-        return Ok(());
-    };
-
+    
     let mut reactions_users = get_reactions_users(&msg).unwrap();
 
     let reaction = query.data.unwrap().parse().unwrap();
