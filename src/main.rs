@@ -100,7 +100,7 @@ async fn main() {
         .messages_handler(move |rx: DispatcherHandlerRx<Message>| {
             rx.for_each_concurrent(None, move |update| async move {
                 if let Some(text) = update.update.text() {
-                    if let Ok(cmd) = Command::parse(text, "Reactions Bot") {
+                    if let Ok(cmd) = Command::parse(text, "reaxnbot") {
                         if let Err(err) = handle_command(update, cmd).await {
                             warn!("message response failed: {:?}", err);
                         }
@@ -155,6 +155,15 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
                 }
             };
 
+            let is_reaction_message = 
+                reply_to_message.from().map_or(false, |user| user.is_bot && (user.username).as_deref().unwrap() == "reaxnbot") &&
+                reply_to_message.text().map_or(false, |text| text.contains("\u{034f}"));
+
+            if !is_reaction_message {
+                cx.reply_to("You can only use /s to reply to a reaction message.").send().await?;
+                return Ok(());
+            }
+
             let reactions_users = get_reactions_users(&reply_to_message).unwrap();
             let chat_id = reply_to_message.chat_id();
             let reply_to_message_id = reply_to_message.id;
@@ -187,14 +196,25 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
                 .await
                 .join("\n");
 
+            
+
             // all of the futures should have been completed at this point (b/c of the joins)
             // so it should be safe to do Arc::try_unwrap(cx), but there is actually no reason to
 
             // respond to the user
-            cx.answer(text)
-                .reply_to_message_id(reply_to_message_id)
-                .send()
-                .await?;
+
+            if text.len() == 0 {
+                cx.answer("_No one reacted to this message\\._")
+                    .reply_to_message_id(reply_to_message_id)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .send()
+                    .await?;
+            } else {
+                cx.answer(text)
+                    .reply_to_message_id(reply_to_message_id)
+                    .send()
+                    .await?;
+            };
         }
     };
 
