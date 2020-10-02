@@ -92,7 +92,7 @@ type UserId = i32;
 #[tokio::main]
 async fn main() {
     teloxide::enable_logging!();
-    info!("Starting Reactions bot");
+    info!("starting reactions bot");
 
     let bot = Bot::from_env();
 
@@ -115,6 +115,17 @@ async fn main() {
                 }
             })
         })
+        // .inline_queries_handler(move |rx: DispatcherHandlerRx<InlineQuery>| {
+        //     rx.for_each_concurrent(None, move |update| async move {
+        //         if let Some(text) = update.update.query {
+        //             if let Ok(cmd) = Command::parse(text, "reaxnbot") {
+        //                 if let Err(err) = handle_command(update, cmd).await {
+        //                     warn!("message response failed: {:?}", err);
+        //                 }
+        //             }
+        //         }
+        //     })
+        // })
         .dispatch()
         .await;
 }
@@ -135,11 +146,13 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
                 }
             };
 
-            // fail gracefully if we don't have permissions to delete /r messages
             match cx.delete_message().send().await {
                 Ok(_) => {}
-                Err(RequestError::ApiError{ kind, .. }) 
-                    if kind == ApiErrorKind::Known(KnownApiErrorKind::MessageCantBeDeleted) => {},
+                Err(RequestError::ApiError { status_code, .. }) 
+                    if status_code.is_client_error() => {
+                        // fail gracefully if we don't have permissions to delete /r messages
+                        // 4xx status codes probably mean the bot doesn't have permissions
+                    },
                 Err(err) => return Err(err),
             };
 
@@ -240,7 +253,7 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
             .await?;
         return Ok(());
     };
-    
+
     let mut reactions_users = get_reactions_users(&msg).unwrap();
 
     let reaction = query.data.unwrap().parse().unwrap();
