@@ -1,9 +1,11 @@
-use std::{borrow::Cow, collections::HashMap, collections::HashSet};
+use std::{
+    borrow::Cow, collections::HashMap, collections::HashSet, convert::Infallible, fmt::Display,
+    str::FromStr,
+};
 
 use lexical;
 use log::{debug, error, info, warn};
 use pretty_env_logger;
-use serde::{Deserialize, Serialize};
 use teloxide::utils::command::BotCommand;
 use teloxide::{prelude::*, types::*};
 use tokio;
@@ -18,7 +20,7 @@ enum Command {
     React,
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 enum Reaction {
     Laugh,
     Anger,
@@ -29,9 +31,20 @@ enum Reaction {
     Custom(char),
 }
 
-impl<'a, S: Into<&'a str>> From<S> for Reaction {
-    fn from(string: S) -> Self {
-        match string.into() {
+static REACTIONS: [Reaction; 6] = [
+    Reaction::Love,
+    Reaction::Laugh,
+    Reaction::Anger,
+    Reaction::Sad,
+    Reaction::Up,
+    Reaction::Down,
+];
+
+impl FromStr for Reaction {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "laugh" => Reaction::Laugh,
             "anger" => Reaction::Anger,
             "love" => Reaction::Love,
@@ -39,24 +52,39 @@ impl<'a, S: Into<&'a str>> From<S> for Reaction {
             "down" => Reaction::Down,
             "sad" => Reaction::Sad,
             _ => unimplemented!(),
+        })
+    }
+}
+
+impl Display for Reaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Reaction::Laugh => write!(f, "laugh"),
+            Reaction::Anger => write!(f, "anger"),
+            Reaction::Love => write!(f, "love"),
+            Reaction::Up => write!(f, "up"),
+            Reaction::Down => write!(f, "down"),
+            Reaction::Sad => write!(f, "sad"),
+            Reaction::Custom(_) => unimplemented!(),
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-struct ReactionData {
-    reaction: Reaction,
-    ids: Vec<i32>,
-}
-
-impl ReactionData {
-    fn new(reaction: Reaction) -> Self {
-        ReactionData {
-            reaction,
-            ids: vec![],
+impl Reaction {
+    pub fn get_emoji(&self) -> &str {
+        match self {
+            Reaction::Love => "❤️",
+            Reaction::Laugh => "😂",
+            Reaction::Anger => "😡",
+            Reaction::Sad => "😭",
+            Reaction::Up => "👍",
+            Reaction::Down => "👎",
+            _ => unimplemented!(),
         }
     }
 }
+
+type UserId = i32;
 
 #[tokio::main]
 async fn main() {
@@ -94,7 +122,6 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
             cx.answer(Command::descriptions()).send().await?;
         }
         Command::React => {
-            debug!("/r received");
             let reply_to_message = {
                 match cx.update.reply_to_message() {
                     Some(message) => message,
@@ -109,18 +136,7 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
 
             cx.answer("\u{034f}")
                 .reply_to_message_id(reply_to_message.id)
-                .reply_markup({
-                    let mut markup = InlineKeyboardMarkup::default();
-                    let data = ReactionData::new(Reaction::Love);
-
-                    markup.append_to_row(
-                        InlineKeyboardButton::new(
-                            "❤",
-                            InlineKeyboardButtonKind::CallbackData("e".to_owned()),
-                        ),
-                        0,
-                    )
-                })
+                .reply_markup(create_markup(HashMap::new()))
                 .send()
                 .await?;
         }
@@ -158,7 +174,7 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
         return Ok(());
     };
 
-    let mut pairs = HashMap::<Reaction, HashSet<i32>>::new();
+    let mut reactions_users = HashMap::<Reaction, HashSet<i32>>::new();
 
     if let Some(entities) = msg.entities() {
         for entity in entities {
@@ -170,27 +186,58 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
                         continue;
                     }
 
-                    url.query_pairs()
-                        .map(move |(user_id, reaction_id)| {
-                            (
-                                reaction_id.as_ref().into(),
-                                lexical::parse(user_id.as_bytes()).unwrap(),
-                            )
-                        })
-                        .fold(&mut pairs, |pairs, (k, v)| {
-                            pairs.entry(k).or_insert_with(|| HashSet::new()).insert(v);
-                            pairs
-                        });
+                    for (reaction_id, user_ids) in url.query_pairs() {
+                        let reaction = reaction_id.parse().unwrap();
+
+                        reactions_users
+                            .entry(reaction)
+                            .or_insert_with(|| HashSet::new())
+                            .extend(
+                                user_ids
+                                    .split(",")
+                                    .map(lexical::parse)
+                                    .collect::<Result<Vec<i32>, _>>()
+                                    .unwrap(),
+                            );
+                    }
                 }
                 _ => {}
             }
         }
     }
 
-    
+    let reaction = query.data.unwrap().parse().unwrap();
+    let reaction_users = reactions_users
+        .entry(reaction)
+        .or_insert_with(|| HashSet::new());
+
+    let mut reaction_removed = false;
+
+    // toggle whether or not the user has this reaction
+    if !reaction_users.insert(query.from.id) {
+        reaction_users.remove(&query.from.id);
+        reaction_removed = true;
+    }
 
     let new_text = format!(
         "[\u{034f}](https://reaxnbot.dev/reactions?{})",
+        reactions_users
+            .iter()
+            .filter_map(|(reaction, users)| if users.len() > 0 {
+                Some(format!(
+                    "{}={}",
+                    reaction,
+                    users
+                        .iter()
+                        .map(|&id| lexical::to_string(id))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ))
+            } else {
+                None
+            })
+            .collect::<Vec<_>>()
+            .join("&")
     );
 
     cx.bot
@@ -202,15 +249,46 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
             new_text,
         )
         .parse_mode(ParseMode::MarkdownV2)
-        .reply_markup(
-            msg.reply_markup()
-                .expect("got a callback query on a message with no reply markup")
-                .clone(),
-        )
+        .reply_markup(create_markup(reactions_users))
         .send()
         .await?;
 
-    cx.bot.answer_callback_query(query.id).send().await?;
+    cx.bot
+        .answer_callback_query(query.id)
+        .text(if reaction_removed {
+            "❎"
+        } else {
+            reaction.get_emoji()
+        })
+        .send()
+        .await?;
 
     Ok(())
+}
+
+fn create_markup(reactions_users: HashMap<Reaction, HashSet<UserId>>) -> InlineKeyboardMarkup {
+    let mut markup = InlineKeyboardMarkup::default();
+
+    for reaction in &REACTIONS {
+        let btn_text =
+            reactions_users
+                .get(&reaction)
+                .map_or(reaction.get_emoji().to_owned(), |users| {
+                    if users.len() > 0 {
+                        format!("{} {}", reaction.get_emoji(), users.len())
+                    } else {
+                        reaction.get_emoji().to_owned()
+                    }
+                });
+
+        markup = markup.append_to_row(
+            InlineKeyboardButton::new(
+                btn_text,
+                InlineKeyboardButtonKind::CallbackData(reaction.to_string()),
+            ),
+            0,
+        );
+    }
+
+    markup
 }
