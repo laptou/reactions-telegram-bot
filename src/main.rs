@@ -7,7 +7,7 @@ use futures::future::join_all;
 use lexical;
 use log::{debug, error, info, warn};
 use pretty_env_logger;
-use teloxide::utils::command::BotCommand;
+use teloxide::{ApiErrorKind, KnownApiErrorKind, utils::command::BotCommand};
 use teloxide::{prelude::*, types::*};
 use tokio;
 use url::Url;
@@ -135,11 +135,17 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
                 }
             };
 
-            cx.delete_message().send().await?;
+            // fail gracefully if we don't have permissions to delete /r messages
+            match cx.delete_message().send().await {
+                Ok(_) => {}
+                Err(RequestError::ApiError{ kind, .. }) 
+                    if kind == ApiErrorKind::Known(KnownApiErrorKind::MessageCantBeDeleted) => {},
+                Err(err) => return Err(err),
+            };
 
             cx.answer("\u{034f}")
                 .reply_to_message_id(reply_to_message.id)
-                .reply_markup(create_markup(HashMap::new()))
+                .reply_markup(create_markup())
                 .disable_web_page_preview(true)
                 .send()
                 .await?;
@@ -195,8 +201,6 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
                 }))
                 .await
                 .join("\n");
-
-            
 
             // all of the futures should have been completed at this point (b/c of the joins)
             // so it should be safe to do Arc::try_unwrap(cx), but there is actually no reason to
@@ -265,25 +269,29 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
         reaction_removed = true;
     }
 
+    let mut reaction_query_params = Vec::new();
+    let mut reaction_display_params = Vec::new();
+
+    for (reaction, users) in reactions_users {
+        if users.len() > 0 {
+            reaction_query_params.push(format!(
+                "{}={}",
+                reaction,
+                users
+                    .iter()
+                    .map(|&id| lexical::to_string(id))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+
+            reaction_display_params.push(format!("{} *{}*", reaction.get_emoji(), users.len()));
+        }
+    }
+
     let new_text = format!(
-        "[\u{034f}](https://reaxnbot.dev/reactions?{})",
-        reactions_users
-            .iter()
-            .filter_map(|(reaction, users)| if users.len() > 0 {
-                Some(format!(
-                    "{}={}",
-                    reaction,
-                    users
-                        .iter()
-                        .map(|&id| lexical::to_string(id))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                ))
-            } else {
-                None
-            })
-            .collect::<Vec<_>>()
-            .join("&")
+        "[\u{034f}](https://reaxnbot.dev/reactions?{}) {}",
+        reaction_query_params.join("&"),
+        reaction_display_params.join("  ")
     );
 
     cx.bot
@@ -295,7 +303,7 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
             new_text,
         )
         .parse_mode(ParseMode::MarkdownV2)
-        .reply_markup(create_markup(reactions_users))
+        .reply_markup(create_markup())
         .disable_web_page_preview(true)
         .send()
         .await?;
@@ -313,24 +321,13 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
     Ok(())
 }
 
-fn create_markup(reactions_users: HashMap<Reaction, HashSet<UserId>>) -> InlineKeyboardMarkup {
+fn create_markup() -> InlineKeyboardMarkup {
     let mut markup = InlineKeyboardMarkup::default();
 
     for reaction in &REACTIONS {
-        let btn_text =
-            reactions_users
-                .get(&reaction)
-                .map_or(reaction.get_emoji().to_owned(), |users| {
-                    if users.len() > 0 {
-                        format!("{} {}", reaction.get_emoji(), users.len())
-                    } else {
-                        reaction.get_emoji().to_owned()
-                    }
-                });
-
         markup = markup.append_to_row(
             InlineKeyboardButton::new(
-                btn_text,
+                reaction.get_emoji(),
                 InlineKeyboardButtonKind::CallbackData(reaction.to_string()),
             ),
             0,
