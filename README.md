@@ -16,6 +16,8 @@ Telegram, so this bot serves as a sort of polyfill.
 
 - If you don't want your chat littered with `/r`s, then give the bot permissions
   to delete messages and it will automatically delete the `/r` messages.
+- If you want to see who did which reaction, reply to a reaction message with
+  the `/s` command.
 
 ## How to use it (for developers)
 
