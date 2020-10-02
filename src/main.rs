@@ -110,7 +110,7 @@ async fn main() {
         })
         .callback_queries_handler(move |rx: DispatcherHandlerRx<CallbackQuery>| {
             rx.for_each_concurrent(None, move |update| async move {
-                if let Err(err) = handle_query(update).await {
+                if let Err(err) = handle_callback_query(update).await {
                     warn!("callback query response failed: {:?}", err);
                 }
             })
@@ -119,7 +119,7 @@ async fn main() {
         //     rx.for_each_concurrent(None, move |update| async move {
         //         if let Some(text) = update.update.query {
         //             if let Ok(cmd) = Command::parse(text, "reaxnbot") {
-        //                 if let Err(err) = handle_command(update, cmd).await {
+        //                 if let Err(err) = handle_inline_query(update, cmd).await {
         //                     warn!("message response failed: {:?}", err);
         //                 }
         //             }
@@ -238,7 +238,7 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
     Ok(())
 }
 
-async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
+async fn handle_callback_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
     let query = cx.update;
 
     let msg = if let Some(msg) = query.message {
@@ -320,6 +320,11 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
 
     Ok(())
 }
+
+async fn handle_inline_query(cx: UpdateWithCx<InlineQuery>) -> ResponseResult<()> {
+    todo!()
+}
+
 
 fn create_markup() -> InlineKeyboardMarkup {
     let mut markup = InlineKeyboardMarkup::default();
