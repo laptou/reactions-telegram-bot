@@ -1,8 +1,9 @@
 use std::{
     borrow::Cow, collections::HashMap, collections::HashSet, convert::Infallible, fmt::Display,
-    str::FromStr,
+    str::FromStr, sync::Arc,
 };
 
+use futures::future::join_all;
 use lexical;
 use log::{debug, error, info, warn};
 use pretty_env_logger;
@@ -18,6 +19,8 @@ enum Command {
     Help,
     #[command(description = "react to a message", rename = "r")]
     React,
+    #[command(description = "show who reacted to a message", rename = "s")]
+    Show,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
@@ -137,6 +140,59 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
             cx.answer("\u{034f}")
                 .reply_to_message_id(reply_to_message.id)
                 .reply_markup(create_markup(HashMap::new()))
+                .disable_web_page_preview(true)
+                .send()
+                .await?;
+        }
+        Command::Show => {
+            let reply_to_message = {
+                match cx.update.reply_to_message() {
+                    Some(message) => message,
+                    None => {
+                        cx.reply_to("You need to reply to a message with /s in order for me to know which message you're asking about.").send().await?;
+                        return Ok(());
+                    }
+                }
+            };
+
+            let reactions_users = get_reactions_users(&reply_to_message).unwrap();
+            let chat_id = reply_to_message.chat_id();
+            let reply_to_message_id = reply_to_message.id;
+
+            // put the context into a temporary Arc so that we can use it in futures
+            let cx = Arc::new(cx);
+
+            let text =
+                // get the user names associated with each reaction, format and join
+                join_all(reactions_users.into_iter().map(|(reaction, users)| {
+                    let cx = cx.clone();
+
+                    async move {
+                        // get the user names associated with this reaction
+                        let user_names = join_all(users.iter().map(|&user_id| {
+                            let cx = cx.clone();
+                            
+                            async move {
+                                match cx.bot.get_chat_member(chat_id, user_id).send().await {
+                                    Ok(user) => user.user.full_name(),
+                                    Err(_) => "(unknown)".to_owned(),
+                                }
+                            }
+                        }))
+                        .await;
+
+                        format!("{} — {}", reaction.get_emoji(), user_names.join(", "))
+                    }
+                }))
+                .await
+                .join("\n");
+
+            // all of the futures should have been completed at this point (b/c of the joins)
+            // so it should be safe to do Arc::try_unwrap(cx), but there is actually no reason to
+
+            // respond to the user
+            cx.answer(text)
+                .reply_to_message_id(reply_to_message_id)
                 .send()
                 .await?;
         }
@@ -174,37 +230,7 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
         return Ok(());
     };
 
-    let mut reactions_users = HashMap::<Reaction, HashSet<i32>>::new();
-
-    if let Some(entities) = msg.entities() {
-        for entity in entities {
-            match &entity.kind {
-                MessageEntityKind::TextLink { url } => {
-                    let url = Url::parse(url).unwrap();
-
-                    if url.domain() != Some("reaxnbot.dev") || url.path() != "/reactions" {
-                        continue;
-                    }
-
-                    for (reaction_id, user_ids) in url.query_pairs() {
-                        let reaction = reaction_id.parse().unwrap();
-
-                        reactions_users
-                            .entry(reaction)
-                            .or_insert_with(|| HashSet::new())
-                            .extend(
-                                user_ids
-                                    .split(",")
-                                    .map(lexical::parse)
-                                    .collect::<Result<Vec<i32>, _>>()
-                                    .unwrap(),
-                            );
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
+    let mut reactions_users = get_reactions_users(&msg).unwrap();
 
     let reaction = query.data.unwrap().parse().unwrap();
     let reaction_users = reactions_users
@@ -250,6 +276,7 @@ async fn handle_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
         )
         .parse_mode(ParseMode::MarkdownV2)
         .reply_markup(create_markup(reactions_users))
+        .disable_web_page_preview(true)
         .send()
         .await?;
 
@@ -291,4 +318,40 @@ fn create_markup(reactions_users: HashMap<Reaction, HashSet<UserId>>) -> InlineK
     }
 
     markup
+}
+
+fn get_reactions_users(msg: &Message) -> Option<HashMap<Reaction, HashSet<UserId>>> {
+    msg.entities().map(|entities| {
+        let mut reactions_users = HashMap::<Reaction, HashSet<i32>>::new();
+
+        for entity in entities {
+            match &entity.kind {
+                MessageEntityKind::TextLink { url } => {
+                    let url = Url::parse(url).unwrap();
+
+                    if url.domain() != Some("reaxnbot.dev") || url.path() != "/reactions" {
+                        continue;
+                    }
+
+                    for (reaction_id, user_ids) in url.query_pairs() {
+                        let reaction = reaction_id.parse().unwrap();
+
+                        reactions_users
+                            .entry(reaction)
+                            .or_insert_with(|| HashSet::new())
+                            .extend(
+                                user_ids
+                                    .split(",")
+                                    .map(lexical::parse)
+                                    .collect::<Result<Vec<i32>, _>>()
+                                    .unwrap(),
+                            );
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        reactions_users
+    })
 }
