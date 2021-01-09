@@ -41,10 +41,6 @@ async fn main() {
     Dispatcher::new(bot)
         .messages_handler(move |rx: DispatcherHandlerRx<Message>| {
             rx.for_each_concurrent(None, move |update| async move {
-                if let Some(sticker) = update.update.sticker() {
-                    debug!("sticker received: {}", sticker.file_id);
-                }
-
                 if let Some(text) = update.update.text() {
                     if let Ok(cmd) = Command::parse(text, "reaxnbot") {
                         if let Err(err) = handle_command(update, cmd).await {
@@ -58,13 +54,6 @@ async fn main() {
             rx.for_each_concurrent(None, move |update| async move {
                 if let Err(err) = handle_callback_query(update).await {
                     warn!("callback query response failed: {:?}", err);
-                }
-            })
-        })
-        .inline_queries_handler(move |rx: DispatcherHandlerRx<InlineQuery>| {
-            rx.for_each_concurrent(None, move |update| async move {
-                if let Err(err) = handle_inline_query(update).await {
-                    warn!("inline query response failed: {:?}", err);
                 }
             })
         })
