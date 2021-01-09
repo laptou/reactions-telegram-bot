@@ -1,10 +1,14 @@
-use std::{borrow::Cow, collections::HashMap, collections::HashSet, convert::Infallible, env, fmt::Display, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, collections::HashSet, convert::Infallible, env, fmt::Display,
+    str::FromStr, sync::Arc, time::Duration,
+};
 
+use anyhow::Context;
 use futures::future::join_all;
 use lexical;
-use log::{debug, error, info, warn};
+use log::{info, warn};
 use pretty_env_logger;
-use teloxide::{ApiErrorKind, KnownApiErrorKind, utils::command::BotCommand};
+use teloxide::utils::command::BotCommand;
 use teloxide::{prelude::*, types::*};
 use tokio::{self, time::delay_for};
 use url::Url;
@@ -16,6 +20,12 @@ enum Command {
     Help,
     #[command(description = "react to a message", rename = "r")]
     React,
+    #[command(description = "react to a message with a ❤")]
+    Heart,
+    #[command(description = "react to a message with a 👍")]
+    Up,
+    #[command(description = "react to a message with a 👎")]
+    Down,
     #[command(description = "show who reacted to a message", rename = "s")]
     Show,
 }
@@ -24,7 +34,7 @@ enum Command {
 enum Reaction {
     Laugh,
     Anger,
-    Love,
+    Heart,
     Up,
     Down,
     Sad,
@@ -32,7 +42,7 @@ enum Reaction {
 }
 
 static REACTIONS: [Reaction; 6] = [
-    Reaction::Love,
+    Reaction::Heart,
     Reaction::Laugh,
     Reaction::Anger,
     Reaction::Sad,
@@ -47,7 +57,7 @@ impl FromStr for Reaction {
         Ok(match s {
             "laugh" => Reaction::Laugh,
             "anger" => Reaction::Anger,
-            "love" => Reaction::Love,
+            "love" => Reaction::Heart,
             "up" => Reaction::Up,
             "down" => Reaction::Down,
             "sad" => Reaction::Sad,
@@ -61,7 +71,7 @@ impl Display for Reaction {
         match self {
             Reaction::Laugh => write!(f, "laugh"),
             Reaction::Anger => write!(f, "anger"),
-            Reaction::Love => write!(f, "love"),
+            Reaction::Heart => write!(f, "love"),
             Reaction::Up => write!(f, "up"),
             Reaction::Down => write!(f, "down"),
             Reaction::Sad => write!(f, "sad"),
@@ -73,7 +83,7 @@ impl Display for Reaction {
 impl Reaction {
     pub fn get_emoji(&self) -> &str {
         match self {
-            Reaction::Love => "❤️",
+            Reaction::Heart => "❤️",
             Reaction::Laugh => "😂",
             Reaction::Anger => "😡",
             Reaction::Sad => "😭",
@@ -91,9 +101,9 @@ async fn main() {
     info!("starting reactions bot");
 
     teloxide::enable_logging!();
-    
+
     println!("teloxide token: {}", env::var("TELOXIDE_TOKEN").unwrap());
-    
+
     delay_for(Duration::from_secs(10)).await;
 
     info!("starting reactions bot pt2");
@@ -134,17 +144,17 @@ async fn main() {
         .await;
 }
 
-async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> ResponseResult<()> {
+async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> anyhow::Result<()> {
     match command {
         Command::Help => {
             cx.answer(Command::descriptions()).send().await?;
         }
-        Command::React => {
+        Command::React | Command::Up | Command::Down | Command::Heart => {
             let reply_to_message = {
                 match cx.update.reply_to_message() {
                     Some(message) => message,
                     None => {
-                        cx.reply_to("You need to reply to a message with /r in order for me to know which message you're reacting to.").send().await?;
+                        cx.reply_to("You need to reply to a message with /r so I know which message you're reacting to.").send().await?;
                         return Ok(());
                     }
                 }
@@ -152,20 +162,49 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
 
             match cx.delete_message().send().await {
                 Ok(_) => {}
-                Err(RequestError::ApiError { status_code, .. }) 
-                    if status_code.is_client_error() => {
-                        // fail gracefully if we don't have permissions to delete /r messages
-                        // 4xx status codes probably mean the bot doesn't have permissions
-                    },
-                Err(err) => return Err(err),
+                Err(RequestError::ApiError { status_code, .. }) if status_code.as_u16() == 401 => {
+                    // continue silently if we don't have permissions to
+                    // delete /r messages 401 status codes probably mean the
+                    // bot doesn't have permissions
+                }
+                Err(err) => return Err(err.into()),
             };
 
-            cx.answer("\u{034f}")
+            let response = cx
+                .answer("\u{034f}")
                 .reply_to_message_id(reply_to_message.id)
-                .reply_markup(create_markup())
+                .reply_markup(create_reaction_keyboard())
                 .disable_web_page_preview(true)
                 .send()
                 .await?;
+
+            // if this was a shortcut command to a specific reaction, put
+            // that reaction in
+            match command {
+                Command::Heart => {
+                    let user = cx
+                        .update
+                        .from()
+                        .context("could not get user that issued the command")?;
+                    toggle_reaction(&cx.bot, Reaction::Heart, &response, user.id).await?;
+                }
+                Command::Up => {
+                    let user = cx
+                        .update
+                        .from()
+                        .context("could not get user that issued the command")?;
+                    toggle_reaction(&cx.bot, Reaction::Up, &response, user.id).await?;
+                }
+                Command::Down => {
+                    let user = cx
+                        .update
+                        .from()
+                        .context("could not get user that issued the command")?;
+                    toggle_reaction(&cx.bot, Reaction::Down, &response, user.id).await?;
+                }
+                Command::React => {}
+                _ => unreachable!(),
+            }
         }
         Command::Show => {
             let reply_to_message = {
@@ -178,12 +217,16 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
                 }
             };
 
-            let is_reaction_message = 
-                reply_to_message.from().map_or(false, |user| user.is_bot && (user.username).as_deref().unwrap() == "reaxnbot") &&
-                reply_to_message.text().map_or(false, |text| text.contains("\u{034f}"));
+            let is_reaction_message = reply_to_message.from().map_or(false, |user| {
+                user.is_bot && (user.username).as_deref().unwrap() == "reaxnbot"
+            }) && reply_to_message
+                .text()
+                .map_or(false, |text| text.contains("\u{034f}"));
 
             if !is_reaction_message {
-                cx.reply_to("You can only use /s to reply to a reaction message.").send().await?;
+                cx.reply_to("You can only use /s to reply to a reaction message.")
+                    .send()
+                    .await?;
                 return Ok(());
             }
 
@@ -203,7 +246,7 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
                         // get the user names associated with this reaction
                         let user_names = join_all(users.iter().map(|&user_id| {
                             let cx = cx.clone();
-                            
+
                             async move {
                                 match cx.bot.get_chat_member(chat_id, user_id).send().await {
                                     Ok(user) => user.user.full_name(),
@@ -223,7 +266,6 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
             // so it should be safe to do Arc::try_unwrap(cx), but there is actually no reason to
 
             // respond to the user
-
             if text.len() == 0 {
                 cx.answer("_No one reacted to this message\\._")
                     .reply_to_message_id(reply_to_message_id)
@@ -242,7 +284,7 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> Response
     Ok(())
 }
 
-async fn handle_callback_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResult<()> {
+async fn handle_callback_query(cx: UpdateWithCx<CallbackQuery>) -> anyhow::Result<()> {
     let query = cx.update;
 
     let msg = if let Some(msg) = query.message {
@@ -258,19 +300,47 @@ async fn handle_callback_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResul
         return Ok(());
     };
 
-    let mut reactions_users = get_reactions_users(&msg).unwrap();
-
     let reaction = query.data.unwrap().parse().unwrap();
+
+    let reaction_added = toggle_reaction(&cx.bot, reaction, &msg, query.from.id).await?;
+
+    cx.bot
+        .answer_callback_query(query.id)
+        .text(if reaction_added {
+            reaction.get_emoji()
+        } else {
+            "❎"
+        })
+        .send()
+        .await?;
+
+    Ok(())
+}
+
+async fn handle_inline_query(cx: UpdateWithCx<InlineQuery>) -> ResponseResult<()> {
+    todo!()
+}
+
+/// Toggles the user's reaction to this message. Returns true if the reaction
+/// was added, and false if it was removed.
+async fn toggle_reaction(
+    bot: &Bot,
+    reaction: Reaction,
+    message: &Message,
+    user_id: i32,
+) -> anyhow::Result<bool> {
+    let mut reactions_users = get_reactions_users(&message).unwrap();
+
     let reaction_users = reactions_users
         .entry(reaction)
         .or_insert_with(|| HashSet::new());
 
-    let mut reaction_removed = false;
+    let mut reaction_added = true;
 
     // toggle whether or not the user has this reaction
-    if !reaction_users.insert(query.from.id) {
-        reaction_users.remove(&query.from.id);
-        reaction_removed = true;
+    if !reaction_users.insert(user_id) {
+        reaction_users.remove(&user_id);
+        reaction_added = false;
     }
 
     let mut reaction_query_params = Vec::new();
@@ -298,39 +368,23 @@ async fn handle_callback_query(cx: UpdateWithCx<CallbackQuery>) -> ResponseResul
         reaction_display_params.join("  ")
     );
 
-    cx.bot
-        .edit_message_text(
-            ChatOrInlineMessage::Chat {
-                chat_id: ChatId::Id(msg.chat_id()),
-                message_id: msg.id,
-            },
-            new_text,
-        )
-        .parse_mode(ParseMode::MarkdownV2)
-        .reply_markup(create_markup())
-        .disable_web_page_preview(true)
-        .send()
-        .await?;
+    bot.edit_message_text(
+        ChatOrInlineMessage::Chat {
+            chat_id: ChatId::Id(message.chat_id()),
+            message_id: message.id,
+        },
+        new_text,
+    )
+    .parse_mode(ParseMode::MarkdownV2)
+    .reply_markup(create_reaction_keyboard())
+    .disable_web_page_preview(true)
+    .send()
+    .await?;
 
-    cx.bot
-        .answer_callback_query(query.id)
-        .text(if reaction_removed {
-            "❎"
-        } else {
-            reaction.get_emoji()
-        })
-        .send()
-        .await?;
-
-    Ok(())
+    Ok(reaction_added)
 }
 
-async fn handle_inline_query(cx: UpdateWithCx<InlineQuery>) -> ResponseResult<()> {
-    todo!()
-}
-
-
-fn create_markup() -> InlineKeyboardMarkup {
+fn create_reaction_keyboard() -> InlineKeyboardMarkup {
     let mut markup = InlineKeyboardMarkup::default();
 
     for reaction in &REACTIONS {
