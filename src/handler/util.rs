@@ -82,6 +82,28 @@ pub async fn toggle_reaction(
         reaction_added = false;
     }
 
+    let new_text = get_reaction_message_text(reactions_users);
+
+    bot.edit_message_text(
+        ChatOrInlineMessage::Chat {
+            chat_id: ChatId::Id(message.chat_id()),
+            message_id: message.id,
+        },
+        new_text,
+    )
+    .parse_mode(ParseMode::MarkdownV2)
+    .reply_markup(create_reaction_keyboard())
+    .disable_web_page_preview(true)
+    .send()
+    .await?;
+
+    Ok(reaction_added)
+}
+
+pub fn get_reaction_message_text<I>(reactions_users: I) -> String
+where
+    I: IntoIterator<Item = (Reaction, HashSet<i32>)>,
+{
     let mut reaction_query_params = Vec::new();
     let mut reaction_display_params = Vec::new();
 
@@ -101,24 +123,9 @@ pub async fn toggle_reaction(
         }
     }
 
-    let new_text = format!(
+    format!(
         "[\u{034f}](https://reaxnbot.dev/reactions?{}) {}",
         reaction_query_params.join("&"),
         reaction_display_params.join("  ")
-    );
-
-    bot.edit_message_text(
-        ChatOrInlineMessage::Chat {
-            chat_id: ChatId::Id(message.chat_id()),
-            message_id: message.id,
-        },
-        new_text,
     )
-    .parse_mode(ParseMode::MarkdownV2)
-    .reply_markup(create_reaction_keyboard())
-    .disable_web_page_preview(true)
-    .send()
-    .await?;
-
-    Ok(reaction_added)
 }
