@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap, collections::HashSet, convert::Infallible, env, fmt::Display,
-    str::FromStr, sync::Arc, time::Duration,
+    str::FromStr, sync::Arc,
 };
 
 use anyhow::Context;
@@ -10,10 +10,10 @@ use log::{info, warn};
 use pretty_env_logger;
 use teloxide::utils::command::BotCommand;
 use teloxide::{prelude::*, types::*};
-use tokio::{self, time::delay_for};
+use tokio::{self};
 use url::Url;
 
-#[derive(BotCommand)]
+#[derive(BotCommand, PartialEq, Eq, Debug, Clone, Copy)]
 #[command(rename = "lowercase", description = "These commands are supported:")]
 enum Command {
     #[command(description = "display this text.")]
@@ -38,7 +38,6 @@ enum Reaction {
     Up,
     Down,
     Sad,
-    Custom(char),
 }
 
 static REACTIONS: [Reaction; 6] = [
@@ -75,7 +74,6 @@ impl Display for Reaction {
             Reaction::Up => write!(f, "up"),
             Reaction::Down => write!(f, "down"),
             Reaction::Sad => write!(f, "sad"),
-            Reaction::Custom(_) => unimplemented!(),
         }
     }
 }
@@ -89,7 +87,6 @@ impl Reaction {
             Reaction::Sad => "😭",
             Reaction::Up => "👍",
             Reaction::Down => "👎",
-            _ => unimplemented!(),
         }
     }
 }
@@ -102,11 +99,7 @@ async fn main() {
 
     teloxide::enable_logging!();
 
-    println!("teloxide token: {}", env::var("TELOXIDE_TOKEN").unwrap());
-
-    delay_for(Duration::from_secs(10)).await;
-
-    info!("starting reactions bot pt2");
+    info!("token: {}", env::var("TELOXIDE_TOKEN").unwrap());
 
     let bot = Bot::from_env();
 
@@ -174,36 +167,27 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> anyhow::
                 .answer("\u{034f}")
                 .reply_to_message_id(reply_to_message.id)
                 .reply_markup(create_reaction_keyboard())
+                .disable_notification(true)
                 .disable_web_page_preview(true)
                 .send()
                 .await?;
 
             // if this was a shortcut command to a specific reaction, put
             // that reaction in
-            match command {
-                Command::Heart => {
-                    let user = cx
-                        .update
-                        .from()
-                        .context("could not get user that issued the command")?;
-                    toggle_reaction(&cx.bot, Reaction::Heart, &response, user.id).await?;
-                }
-                Command::Up => {
-                    let user = cx
-                        .update
-                        .from()
-                        .context("could not get user that issued the command")?;
-                    toggle_reaction(&cx.bot, Reaction::Up, &response, user.id).await?;
-                }
-                Command::Down => {
-                    let user = cx
-                        .update
-                        .from()
-                        .context("could not get user that issued the command")?;
-                    toggle_reaction(&cx.bot, Reaction::Down, &response, user.id).await?;
-                }
-                Command::React => {}
-                _ => unreachable!(),
+            if command != Command::React {
+                let user = cx
+                    .update
+                    .from()
+                    .context("could not get user that issued the command")?;
+
+                let reaction = match command {
+                    Command::Heart => Reaction::Heart,
+                    Command::Up => Reaction::Up,
+                    Command::Down => Reaction::Down,
+                    _ => unreachable!(),
+                };
+
+                toggle_reaction(&cx.bot, reaction, &response, user.id).await?;
             }
         }
         Command::Show => {
@@ -211,7 +195,7 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> anyhow::
                 match cx.update.reply_to_message() {
                     Some(message) => message,
                     None => {
-                        cx.reply_to("You need to reply to a message with /s in order for me to know which message you're asking about.").send().await?;
+                        cx.reply_to("You need to reply to a message with /s so I know which message you're asking about.").send().await?;
                         return Ok(());
                     }
                 }
@@ -230,49 +214,44 @@ async fn handle_command(cx: UpdateWithCx<Message>, command: Command) -> anyhow::
                 return Ok(());
             }
 
-            let reactions_users = get_reactions_users(&reply_to_message).unwrap();
             let chat_id = reply_to_message.chat_id();
             let reply_to_message_id = reply_to_message.id;
+            let mut reactions: Vec<(Reaction, Vec<String>)> = vec![];
 
-            // put the context into a temporary Arc so that we can use it in futures
-            let cx = Arc::new(cx);
+            // this loop was originally done in parallel with a bunch of joins
+            // and async move closures but this is easier to read
+            
+            for (reaction, user_ids) in get_reactions_users(&reply_to_message).unwrap() {
+                let mut user_names = vec![];
 
-            let text =
-                // get the user names associated with each reaction, format and join
-                join_all(reactions_users.into_iter().map(|(reaction, users)| {
-                    let cx = cx.clone();
+                for user_id in user_ids {
+                    let user_name = match cx.bot.get_chat_member(chat_id, user_id).send().await {
+                        Ok(user) => user.user.full_name(),
+                        Err(_) => "(unknown)".to_owned(),
+                    };
 
-                    async move {
-                        // get the user names associated with this reaction
-                        let user_names = join_all(users.iter().map(|&user_id| {
-                            let cx = cx.clone();
+                    user_names.push(user_name);
+                }
 
-                            async move {
-                                match cx.bot.get_chat_member(chat_id, user_id).send().await {
-                                    Ok(user) => user.user.full_name(),
-                                    Err(_) => "(unknown)".to_owned(),
-                                }
-                            }
-                        }))
-                        .await;
-
-                        format!("{} — {}", reaction.get_emoji(), user_names.join(", "))
-                    }
-                }))
-                .await
-                .join("\n");
-
-            // all of the futures should have been completed at this point (b/c of the joins)
-            // so it should be safe to do Arc::try_unwrap(cx), but there is actually no reason to
+                reactions.push((reaction, user_names));
+            }
 
             // respond to the user
-            if text.len() == 0 {
+            if reactions.len() == 0 {
                 cx.answer("_No one reacted to this message\\._")
                     .reply_to_message_id(reply_to_message_id)
                     .parse_mode(ParseMode::MarkdownV2)
                     .send()
                     .await?;
             } else {
+                let text = reactions
+                    .into_iter()
+                    .map(|(reaction, user_names)| {
+                        format!("{} — {}", reaction.get_emoji(), user_names.join(", "))
+                    })
+                    .collect::<Vec<String>>()
+                    .join("\n");
+
                 cx.answer(text)
                     .reply_to_message_id(reply_to_message_id)
                     .send()
