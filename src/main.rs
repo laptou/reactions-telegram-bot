@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow, collections::HashMap, collections::HashSet, convert::Infallible, fmt::Display,
-    str::FromStr, sync::Arc,
-};
+use std::{borrow::Cow, collections::HashMap, collections::HashSet, convert::Infallible, env, fmt::Display, str::FromStr, sync::Arc, time::Duration};
 
 use futures::future::join_all;
 use lexical;
@@ -9,7 +6,7 @@ use log::{debug, error, info, warn};
 use pretty_env_logger;
 use teloxide::{ApiErrorKind, KnownApiErrorKind, utils::command::BotCommand};
 use teloxide::{prelude::*, types::*};
-use tokio;
+use tokio::{self, time::delay_for};
 use url::Url;
 
 #[derive(BotCommand)]
@@ -91,8 +88,15 @@ type UserId = i32;
 
 #[tokio::main]
 async fn main() {
-    teloxide::enable_logging!();
     info!("starting reactions bot");
+
+    teloxide::enable_logging!();
+    
+    println!("teloxide token: {}", env::var("TELOXIDE_TOKEN").unwrap());
+    
+    delay_for(Duration::from_secs(10)).await;
+
+    info!("starting reactions bot pt2");
 
     let bot = Bot::from_env();
 
