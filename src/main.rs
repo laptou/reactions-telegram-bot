@@ -72,12 +72,12 @@ pub async fn webhook<'a>(bot: Bot) -> impl UpdateListener<Infallible> {
         .parse()
         .expect("PORT value to be integer");
     let path = format!("bot{}", teloxide_token);
-    let url = format!("https://bot.reaxnbot.dev/reaction/{}", path);
+    let url = format!("https://reaxnbot.dev/reaction/{}", path);
 
-    // bot.set_webhook(url)
-    //     .send()
-    //     .await
-    //     .expect("Cannot setup a webhook");
+    bot.set_webhook(url)
+        .send()
+        .await
+        .expect("Cannot setup a webhook");
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
