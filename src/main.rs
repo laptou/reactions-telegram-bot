@@ -108,7 +108,9 @@ pub async fn webhook<'a>(bot: Bot) -> impl UpdateListener<Infallible> {
             StatusCode::OK
         });
 
-    let test_route = warp::get().map(|| format!("hello world"));
+    let test_route = warp::get()
+        .and(warp::path::tail())
+        .map(|tail| format!("hello world {:?}", tail));
 
     let server = server.or(test_route).recover(handle_rejection);
 
