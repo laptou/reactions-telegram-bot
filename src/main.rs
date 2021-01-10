@@ -35,7 +35,7 @@ async fn main() {
 
     teloxide::enable_logging!();
 
-    info!("token: {}", env::var("TELOXIDE_TOKEN").unwrap());
+    info!("token: {:?}", env::var("TELOXIDE_TOKEN").unwrap());
 
     let bot = Bot::from_env();
 
