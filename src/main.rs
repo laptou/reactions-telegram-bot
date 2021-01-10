@@ -71,8 +71,8 @@ pub async fn webhook<'a>(bot: Bot) -> impl UpdateListener<Infallible> {
         .expect("PORT env variable missing")
         .parse()
         .expect("PORT value to be integer");
-    let path = format!("bot{}", teloxide_token);
-    let url = format!("https://reaxnbot.dev/reaction/{}", path);
+    let path = format!("reaction/bot{}", teloxide_token);
+    let url = format!("https://reaxnbot.dev/{}", path);
 
     bot.set_webhook(url)
         .send()
