@@ -1,1 +1,1 @@
-bot: ./target/release/tg-react-bot
+web: ./target/release/tg-react-bot
