@@ -10,7 +10,7 @@ mod handler;
 mod reaction;
 
 use handler::{handle_callback_query, handle_command};
-use warp::{Filter, hyper::StatusCode};
+use warp::{hyper::StatusCode, Filter};
 
 #[derive(BotCommand, PartialEq, Eq, Debug, Clone, Copy)]
 #[command(rename = "lowercase", description = "These commands are supported:")]
@@ -74,10 +74,10 @@ pub async fn webhook<'a>(bot: Bot) -> impl UpdateListener<Infallible> {
     let path = format!("bot{}", teloxide_token);
     let url = format!("https://bot.reaxnbot.dev/reaction/{}", path);
 
-    bot.set_webhook(url)
-        .send()
-        .await
-        .expect("Cannot setup a webhook");
+    // bot.set_webhook(url)
+    //     .send()
+    //     .await
+    //     .expect("Cannot setup a webhook");
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -104,8 +104,11 @@ pub async fn webhook<'a>(bot: Bot) -> impl UpdateListener<Infallible> {
             }
 
             StatusCode::OK
-        })
-        .recover(handle_rejection);
+        });
+
+    let test_route = warp::get().map(|| format!("hello world"));
+
+    let server = server.or(test_route).recover(handle_rejection);
 
     let serve = warp::serve(server);
 
