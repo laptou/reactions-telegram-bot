@@ -73,7 +73,8 @@ pub async fn webhook<'a>(bot: Bot) -> impl UpdateListener<Infallible> {
         .expect("PORT value to be integer");
 
     let endpoint = format!("bot{}", teloxide_token);
-    let url = format!("https://reaxnbot.dev/reaction/{}", endpoint);
+    let prefix = "reactions";
+    let url = format!("https://reaxnbot.dev/{}/{}", prefix, endpoint);
 
     bot.set_webhook(url)
         .send()
@@ -83,7 +84,7 @@ pub async fn webhook<'a>(bot: Bot) -> impl UpdateListener<Infallible> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
     let server = warp::post()
-        .and(warp::path("reaction"))
+        .and(warp::path(prefix))
         .and(warp::path(endpoint))
         .and(warp::body::json())
         .map(move |json: serde_json::Value| {
