@@ -11,7 +11,7 @@ teloxide = "0.3"
 teloxide-macros = "0.3"
 log = "0.4.11"
 pretty_env_logger = "0.4.0"
-tokio = { version = "0.2", features = ["full"] }
+tokio = { version = "1.8", features = ["full"] }
 url = "2.2"
 lexical = "5.2.0"
 anyhow = "1.0"
